@@ -15,10 +15,12 @@ HEADERS = {
     'X-RapidAPI-Host': API_HOST
 }
 
+
 def api_nba_request(endpoint):
     url = f"https://{API_HOST}/{endpoint}"
     response = requests.get(url, headers=HEADERS)
     return response.json()
+
 
 @app.route('/getAllPlayers', methods=['GET'])
 def get_all_players():
@@ -52,6 +54,7 @@ def get_all_players():
     else:
         return jsonify({'error': f'API request failed with status {response.status_code}'})
 
+
 @app.route('/getTeamsInfo', methods=['GET'])
 def get_teams_info():
     url = f"https://{API_HOST}/teams"
@@ -81,6 +84,7 @@ def get_teams_info():
             return jsonify({'error': 'Invalid API response format'})
     else:
         return jsonify({'error': f'API request failed with status {response.status_code}'})
+
 
 @app.route('/getTeamInfo/<path:identifier>', methods=['GET'])
 def get_specific_team_info(identifier):
@@ -121,9 +125,11 @@ def get_specific_player_info(identifier):
     else:
         return jsonify({'error': 'Player not found'}), 404    
 
+
 @app.route('/status', methods=['GET'])
 def status():
     return jsonify({"status": "Service is up and running"})
+
 
 if __name__ == '__main__':
     app.run(debug=True)

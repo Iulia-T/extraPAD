@@ -48,7 +48,7 @@ app.use('/recipes/*', forwardRequest(RECIPES_SERVICE_URL));
 app.get('/recipe-by-team/:teamIdOrName', async (req, res) => {
     const identifier = req.params.teamIdOrName;
     const isNumeric = /^\d+$/.test(identifier); // Check if identifier is numeric (ID)
-    const teamEndpoint = isNumeric ? `/getTeamInfo/${identifier}` : `/getTeamInfo/${identifier}`; // Adjust based on your nba.py routing
+    const teamEndpoint = isNumeric ? `/getTeamInfo/${identifier}` : `/getTeamInfo/${identifier}`; 
 
     try {
         const teamResponse = await axios.get(`${NBA_SERVICE_URL}${teamEndpoint}`);
@@ -60,7 +60,6 @@ app.get('/recipe-by-team/:teamIdOrName', async (req, res) => {
     }
 });
 
-// Helper function to determine if the identifier is numeric (ID)
 function isNumeric(n) {
     return !isNaN(parseFloat(n)) && isFinite(n);
 }
@@ -81,10 +80,52 @@ app.get('/recipe-by-player/:playerIdOrName', async (req, res) => {
     }
 });
 
+
+app.get('/recipe-starting-with-team/:teamIdOrName', async (req, res) => {
+    const identifier = req.params.teamIdOrName;
+    // Determine if the identifier is numeric or not
+    const isNumeric = /^\d+$/.test(identifier);
+    // Use the appropriate NBA service endpoint based on whether the identifier is numeric
+    const teamEndpoint = isNumeric ? `/getTeamInfo/${identifier}` : `/getTeamInfo/${encodeURIComponent(identifier)}`;
+
+    console.log(`Requesting: ${NBA_SERVICE_URL}${teamEndpoint}`); // Log the endpoint that will be called
+
+    try {
+        // Get team information
+        const teamResponse = await axios.get(`${NBA_SERVICE_URL}${teamEndpoint}`);
+        // If the team is not found, return an error
+        if (!teamResponse.data || teamResponse.data.error) {
+            return res.status(404).json({ message: 'Team not found' });
+        }
+        const teamName = teamResponse.data.name;
+        const firstLetter = teamName.charAt(0).toUpperCase();
+
+        // Get all recipes
+        const recipesResponse = await axios.get(`${RECIPES_SERVICE_URL}/getRecipes`);
+        // Filter for a recipe starting with the same letter as the team name
+        const matchingRecipe = recipesResponse.data.find(recipe => recipe.name.startsWith(firstLetter));
+
+        // If a matching recipe is found, return it with the team info
+        if (matchingRecipe) {
+            res.json({ team: teamResponse.data, recipe: matchingRecipe });
+        } else {
+            // If no matching recipe is found, return a message stating so
+            res.status(404).json({ message: `No recipe found starting with the letter ${firstLetter}` });
+        }
+    } catch (error) {
+        // If an error occurs, handle it
+        handleError(res, error);
+    }
+});
+
+
+
+
 // General status check
 app.get('/status', (req, res) => {
     res.json({ message: 'Gateway is running' });
 });
+
 
 // Endpoint to check the status of both NBA and Recipes services
 app.get('/services-status', async (req, res) => {
@@ -99,6 +140,7 @@ app.get('/services-status', async (req, res) => {
         handleError(res, error);
     }
 });
+
 
 // Start the gateway on port 3000
 app.listen(3000, () => {
