@@ -6,26 +6,33 @@ app.use(express.json());
 
 const NBA_SERVICE_URL = 'http://localhost:5000';
 const RECIPES_SERVICE_URL = 'http://localhost:5001';
+const TIMEOUT = 5000; // Timeout set for 5 seconds
 
 // Helper function to handle errors
 function handleError(res, error) {
-    console.error('Error occurred:', error.response || error.message);
-    res.status(error.response ? error.response.status : 500).json({
+    console.error('Error occurred:', error.code === 'ECONNABORTED' ? `A timeout occurred: ${error.message}` : error.response || error.message);
+    res.status(error.response ? error.response.status : error.code === 'ECONNABORTED' ? 408 : 500).json({
         message: 'Error forwarding the request',
-        error: error.response ? error.response.data : error.message
+        error: error.code === 'ECONNABORTED' ? `A timeout occurred: ${error.message}` : error.response ? error.response.data : error.message
     });
 }
 
-// Route forwarding function
+// Helper function to determine if the identifier is numeric (ID)
+function isNumeric(n) {
+    return !isNaN(parseFloat(n)) && isFinite(n);
+}
+
+// Route forwarding function with timeout
 function forwardRequest(serviceBaseUrl) {
     return async (req, res) => {
-        const servicePath = req.originalUrl.split('/').slice(2).join('/'); // Remove the first part of the path ('/nba' or '/recipes')
+        const servicePath = req.originalUrl.split('/').slice(2).join('/'); // Remove the first part of the path
         const url = `${serviceBaseUrl}/${servicePath}`;
         
         try {
             const axiosConfig = {
                 method: req.method,
                 url: url,
+                timeout: TIMEOUT, // Include the timeout in the configuration
                 ...(Object.keys(req.body || {}).length > 0 && { data: req.body }),
                 headers: { ...req.headers, 'Content-Length': JSON.stringify(req.body).length }
             };
@@ -59,10 +66,6 @@ app.get('/recipe-by-team/:teamIdOrName', async (req, res) => {
         handleError(res, error);
     }
 });
-
-function isNumeric(n) {
-    return !isNaN(parseFloat(n)) && isFinite(n);
-}
 
 // Endpoint to get a recipe by player ID or name
 app.get('/recipe-by-player/:playerIdOrName', async (req, res) => {
@@ -126,12 +129,11 @@ app.get('/status', (req, res) => {
     res.json({ message: 'Gateway is running' });
 });
 
-
 // Endpoint to check the status of both NBA and Recipes services
 app.get('/services-status', async (req, res) => {
     try {
-        const nbaStatusResponse = await axios.get(`${NBA_SERVICE_URL}/status`);
-        const recipesStatusResponse = await axios.get(`${RECIPES_SERVICE_URL}/status`);
+        const nbaStatusResponse = await axios.get(`${NBA_SERVICE_URL}/status`, { timeout: TIMEOUT });
+        const recipesStatusResponse = await axios.get(`${RECIPES_SERVICE_URL}/status`, { timeout: TIMEOUT });
         res.json({
             nbaService: nbaStatusResponse.data,
             recipesService: recipesStatusResponse.data,
@@ -140,7 +142,6 @@ app.get('/services-status', async (req, res) => {
         handleError(res, error);
     }
 });
-
 
 // Start the gateway on port 3000
 app.listen(3000, () => {
