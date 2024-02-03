@@ -1,12 +1,55 @@
 const express = require('express');
 const axios = require('axios');
+const redis = require('redis');
 const app = express();
 
 app.use(express.json());
 
 const NBA_SERVICE_URL = 'http://localhost:5000';
 const RECIPES_SERVICE_URL = 'http://localhost:5001';
-const TIMEOUT = 5000; // Timeout set for 5 seconds
+const TIMEOUT = 5000; 
+const MAX_CONCURRENT_REQUESTS = 10; 
+
+const REDIS_PORT = process.env.REDIS_PORT || 6379;
+const redisClient = redis.createClient(REDIS_PORT);
+
+// Connect to Redis
+redisClient.on('error', (err) => console.log('Redis Client Error', err));
+redisClient.connect();
+
+// Middleware for Redis cache
+const cacheMiddleware = async (req, res, next) => {
+    const { originalUrl } = req;
+    try {
+        const cacheResult = await redisClient.get(originalUrl);
+        if (cacheResult != null) {
+            console.log('Cache hit');
+            return res.status(200).json(JSON.parse(cacheResult));
+        } else {
+            console.log('Cache miss');
+            next();
+        }
+    } catch (error) {
+        console.error('Redis error', error);
+        next(error);
+    }
+};
+
+let ongoingRequests = 0;
+
+// Middleware to limit concurrent requests
+function limitConcurrentRequests(req, res, next) {
+    if (ongoingRequests >= MAX_CONCURRENT_REQUESTS) {
+        return res.status(503).send('Server busy, please try again later.');
+    }
+    ongoingRequests++;
+    res.on('finish', () => {
+        ongoingRequests--;
+    });
+    next();
+}
+
+app.use(limitConcurrentRequests); // Apply the middleware globally
 
 // Helper function to handle errors
 function handleError(res, error) {
@@ -25,7 +68,7 @@ function isNumeric(n) {
 // Route forwarding function with timeout
 function forwardRequest(serviceBaseUrl) {
     return async (req, res) => {
-        const servicePath = req.originalUrl.split('/').slice(2).join('/'); // Remove the first part of the path
+        const servicePath = req.originalUrl.split('/').slice(2).join('/');
         const url = `${serviceBaseUrl}/${servicePath}`;
         
         try {
@@ -54,7 +97,7 @@ app.use('/recipes/*', forwardRequest(RECIPES_SERVICE_URL));
 // Endpoint to get a recipe by team ID or name
 app.get('/recipe-by-team/:teamIdOrName', async (req, res) => {
     const identifier = req.params.teamIdOrName;
-    const isNumeric = /^\d+$/.test(identifier); // Check if identifier is numeric (ID)
+    const isNumeric = /^\d+$/.test(identifier); 
     const teamEndpoint = isNumeric ? `/getTeamInfo/${identifier}` : `/getTeamInfo/${identifier}`; 
 
     try {
@@ -70,7 +113,6 @@ app.get('/recipe-by-team/:teamIdOrName', async (req, res) => {
 // Endpoint to get a recipe by player ID or name
 app.get('/recipe-by-player/:playerIdOrName', async (req, res) => {
     const identifier = req.params.playerIdOrName;
-    // Determine the correct endpoint based on whether the identifier is numeric
     const playerEndpoint = isNumeric(identifier) ? `/getPlayerInfo/${identifier}` : `/getPlayerInfo/${identifier}`;
 
     try {
@@ -86,37 +128,28 @@ app.get('/recipe-by-player/:playerIdOrName', async (req, res) => {
 
 app.get('/recipe-starting-with-team/:teamIdOrName', async (req, res) => {
     const identifier = req.params.teamIdOrName;
-    // Determine if the identifier is numeric or not
     const isNumeric = /^\d+$/.test(identifier);
-    // Use the appropriate NBA service endpoint based on whether the identifier is numeric
     const teamEndpoint = isNumeric ? `/getTeamInfo/${identifier}` : `/getTeamInfo/${encodeURIComponent(identifier)}`;
 
-    console.log(`Requesting: ${NBA_SERVICE_URL}${teamEndpoint}`); // Log the endpoint that will be called
+    console.log(`Requesting: ${NBA_SERVICE_URL}${teamEndpoint}`); 
 
     try {
-        // Get team information
         const teamResponse = await axios.get(`${NBA_SERVICE_URL}${teamEndpoint}`);
-        // If the team is not found, return an error
         if (!teamResponse.data || teamResponse.data.error) {
             return res.status(404).json({ message: 'Team not found' });
         }
         const teamName = teamResponse.data.name;
         const firstLetter = teamName.charAt(0).toUpperCase();
 
-        // Get all recipes
         const recipesResponse = await axios.get(`${RECIPES_SERVICE_URL}/getRecipes`);
-        // Filter for a recipe starting with the same letter as the team name
         const matchingRecipe = recipesResponse.data.find(recipe => recipe.name.startsWith(firstLetter));
 
-        // If a matching recipe is found, return it with the team info
         if (matchingRecipe) {
             res.json({ team: teamResponse.data, recipe: matchingRecipe });
         } else {
-            // If no matching recipe is found, return a message stating so
             res.status(404).json({ message: `No recipe found starting with the letter ${firstLetter}` });
         }
     } catch (error) {
-        // If an error occurs, handle it
         handleError(res, error);
     }
 });
@@ -125,8 +158,11 @@ app.get('/recipe-starting-with-team/:teamIdOrName', async (req, res) => {
 
 
 // General status check
-app.get('/status', (req, res) => {
+app.get('/status', cacheMiddleware, async (req, res) => {
     res.json({ message: 'Gateway is running' });
+    const result = { nbaService: nbaStatusResponse.data, recipesService: recipesStatusResponse.data };
+    await redisClient.setEx(req.originalUrl, 3600, JSON.stringify(result)); // Cache for 1 hour
+    res.json(result);
 });
 
 // Endpoint to check the status of both NBA and Recipes services
